@@ -1,30 +1,37 @@
 #!/usr/bin/env bash
 
 set -e
-echo "📦 Replacing build.gradle.kts and configuring signing..."
+echo "🔐 Starting keystore injection and Gradle configuration..."
 
 : "${KEY_STORE:?Missing KEY_STORE}"
 : "${CM_KEYSTORE_PASSWORD:?Missing CM_KEYSTORE_PASSWORD}"
 : "${CM_KEY_ALIAS:?Missing CM_KEY_ALIAS}"
 : "${CM_KEY_PASSWORD:?Missing CM_KEY_PASSWORD}"
 
+# Ensure folder structure
+mkdir -p android
 mkdir -p android/app
 
-echo "📥 Downloading keystore..."
-curl -fsSL -o android/app/keystore.jks "$KEY_STORE" || {
-  echo "❌ Failed to download keystore"
+# 🔽 Download keystore
+echo "📥 Downloading keystore to android/keystore.jks..."
+curl -fsSL -o android/keystore.jks "$KEY_STORE" || {
+  echo "❌ Failed to download keystore from $KEY_STORE"
   exit 1
 }
+[[ -f android/keystore.jks ]] && echo "✅ keystore.jks is present"
 
-echo "📝 Writing key.properties..."
+# 📝 Write key.properties
+echo "📝 Writing android/key.properties..."
 cat > android/key.properties <<EOF
 storeFile=keystore.jks
 storePassword=$CM_KEYSTORE_PASSWORD
 keyAlias=$CM_KEY_ALIAS
 keyPassword=$CM_KEY_PASSWORD
 EOF
+[[ -f android/key.properties ]] && echo "✅ key.properties written"
 
-echo "🧾 Writing full build.gradle.kts file..."
+# 🧾 Write android/app/build.gradle.kts
+echo "🧾 Writing android/app/build.gradle.kts..."
 cat > android/app/build.gradle.kts <<EOF
 import java.util.Properties
 
@@ -34,12 +41,17 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
-val keystoreProperties = Properties().apply {
-    load(File(rootProject.rootDir, "android/key.properties").inputStream())
+val keystorePropertiesFile = File(rootProject.projectDir, "android/key.properties")
+val keystoreProperties = Properties()
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(keystorePropertiesFile.inputStream())
+    println("✅ key.properties loaded for signing.")
+} else {
+    println("⚠️ key.properties not found — skipping signing.")
 }
 
 android {
-    namespace = "com.example.app"
+    namespace = "${System.getenv("PKG_NAME") ?: "com.example.app"}"
     compileSdk = 35
     ndkVersion = "27.0.12077973"
 
@@ -54,7 +66,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.example.app"
+        applicationId = "${System.getenv("PKG_NAME") ?: "com.example.app"}"
         minSdk = 21
         targetSdk = 34
         versionCode = 1
@@ -62,14 +74,16 @@ android {
     }
 
     signingConfigs {
-        create("release") {
-            storeFile = file("keystore.jks")
-            storePassword = keystoreProperties["storePassword"] as String
-            keyAlias = keystoreProperties["keyAlias"] as String
-            keyPassword = keystoreProperties["keyPassword"] as String
-            enableV1Signing = true
-            enableV2Signing = true
-            enableV3Signing = true
+        maybeCreate("release").apply {
+            if (keystorePropertiesFile.exists()) {
+                storeFile = File(rootProject.projectDir, "android/keystore.jks")
+                storePassword = keystoreProperties["storePassword"] as String
+                keyAlias = keystoreProperties["keyAlias"] as String
+                keyPassword = keystoreProperties["keyPassword"] as String
+                enableV1Signing = true
+                enableV2Signing = true
+                enableV3Signing = true
+            }
         }
     }
 
@@ -77,7 +91,9 @@ android {
         getByName("release") {
             isMinifyEnabled = true
             isShrinkResources = true
-            signingConfig = signingConfigs.getByName("release")
+            if (keystorePropertiesFile.exists()) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
         getByName("debug") {
@@ -102,5 +118,33 @@ dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
 }
 EOF
+[[ -f android/app/build.gradle.kts ]] && echo "✅ app/build.gradle.kts written"
 
-echo "✅ build.gradle.kts replaced and signing configured"
+# 🧾 Write android/build.gradle.kts (project-level)
+echo "📁 Writing android/build.gradle.kts..."
+cat > android/build.gradle.kts <<EOF
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath("com.android.tools.build:gradle:8.3.0")
+        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.22")
+    }
+}
+
+plugins {
+    id("dev.flutter.flutter-gradle-plugin") version "1.0.0" apply false
+}
+
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+EOF
+[[ -f android/build.gradle.kts ]] && echo "✅ build.gradle.kts written at android/"
+
+echo "🚀 Keystore injection and Gradle setup completed."
