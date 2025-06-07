@@ -616,6 +616,7 @@ workflows:
       - name: Make scripts executable (safe)
         script: |
           echo "✅Setting All Script Files Executable with Safe Mode..."
+          
           if [ -d ./scripts ]; then chmod +x ./scripts/*.sh; fi
       - *debug_env
       - *inject_keystore
